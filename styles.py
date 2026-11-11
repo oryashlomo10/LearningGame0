@@ -166,6 +166,8 @@ h1, h2, h3, p, label, span, div { font-family: 'Heebo', sans-serif; }
 .scrollbox { max-height: 620px; overflow-y: auto; padding: 0.3rem; }
 .chunk { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 0.8rem 1rem; margin-bottom: 0.7rem; }
 .chunk-text { white-space: pre-wrap; line-height: 1.75; font-size: 1rem; }
+.gen-option { padding: 0.3rem 0.6rem; margin: 0.2rem 0; border: 1px solid var(--border); border-radius: 8px; }
+.gen-right { border-color: var(--gold); color: var(--gold); font-weight: 700; }
 .page-mark { text-align: center; color: var(--gold); font-weight: 700; font-size: 0.85rem; margin: 0.9rem 0 0.3rem; }
 .st-key-materials_btn { align-items: center; margin-top: 0.4rem; }
 [data-testid="stFileUploaderDropzone"] { background: var(--panel); border: 1.5px dashed var(--border); border-radius: 14px; color: var(--text); }

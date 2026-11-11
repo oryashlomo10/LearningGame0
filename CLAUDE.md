@@ -20,6 +20,8 @@ game_logic.py      Pure game rules/state (no Streamlit): territories, attacks, s
 question_bank.py   Loads + validates questions (only place that knows where questions come from)
 qgen/extract.py    Text extraction from uploaded PDF/TXT (pypdf), page numbers kept, Hebrew error messages (no Streamlit)
 qgen/chunking.py   Splits extracted text into overlapping chunks that remember page + character position (no Streamlit)
+qgen/providers.py  LLM Provider interface (generate_text), OllamaProvider (local HTTP API, urllib), MockProvider (tests), provider_from_env (no Streamlit)
+qgen/generate.py   Prompts (chunk text only), JSON parsing, validation (4 options, answer, difficulty, quote found in chunk), source page/chunk id (no Streamlit)
 attempts.py        Appends each REAL answer attempt to data/attempts.jsonl (anonymous, never raises)
 styles.py          All page CSS (palette variables)
 map_geometry.py    Generates the world map shapes + territory adjacency (pure Python, computed at import)
@@ -47,12 +49,13 @@ Question schema (the contract for any future question source, e.g. AI): `id, que
 - Questions are loaded from JSON, validated, and passed into the game as plain dicts.
 - Upload screen (menu -> "העלאת חומר לימוד"): upload a PDF or TXT, see the extracted text (with page markers) and the chunks (page range, word count, overlap). Nothing is saved and no questions are generated yet. Bad files (empty, corrupt, encrypted, scanned/image-only, binary, too big/long) give a clear Hebrew message. Chunks are exact substrings of `full_text`, so a quote from a chunk can always be located again. Known limitation: lines that mix Hebrew with English/numbers can come out of PDFs in scrambled order (the screen warns about it); scanned PDFs need OCR, which does not exist.
 - Data collection for the future ML model: every answer by the real player is appended to `data/attempts.jsonl` (fields: schema_version, attempt_id, player_id, session_id, timestamp, question_id, topic, difficulty, chosen_option, is_correct, response_time_ms). Simulated opponents are never recorded. ids are random (player_id per browser session, session_id per game); response time is measured on the server from the first display of the question. A save failure shows a warning and the game continues. Duplicate attempts are ignored.
+- Question generation (upload screen, tab "יצירת שאלות (ניסיוני)"): button sends the first N chunks (one request per chunk) to a local Ollama model and shows the valid questions with answer, explanation, topic, difficulty, source quote, chunk id and page; rejected questions/chunks are listed with a Hebrew reason. Display/review only: NOT connected to the game, nothing saved. Config via env vars `CONQUEST_OLLAMA_MODEL` (required, no default), `CONQUEST_OLLAMA_URL` (default http://localhost:11434), `CONQUEST_OLLAMA_TIMEOUT` (seconds, default 180). Models are never downloaded automatically. The source quote must appear in the chunk (whitespace-insensitive); duplicate question texts are dropped; options are shuffled deterministically. Generated question = game schema + `source_quote, source_chunk_id, source_page, source_document`, id `gen-<chunk_id>-<n>`. Tested only with MockProvider and a fake local HTTP server, not with a real Ollama model yet.
 - State lives in `st.session_state` only (a full browser reload starts over).
 
 ## 6. Planned, NOT Implemented
 Do not assume any of these exist:
 - DOCX/PPTX upload and OCR for scanned PDFs
-- AI question generation (LLM/API calls), source references on questions, reliability checks - only the JSON bank exists. Next: `qgen/llm.py`, `generate.py`, `verify.py`
+- Feeding generated questions into the game (they are display/review only), blind-solve / second-model reliability checks (`verify.py`), saving generated questions, paid or hosted LLM providers
 - Real multiplayer, study groups, login/accounts, database/persistence
 - Adjacency-based rules (attack only neighbors, region bonuses, defending borders) - the data exists, the rules do not. Defending, real players.
 - Automated tests in the repo, per-topic progress tracking
@@ -84,6 +87,6 @@ streamlit run app.py        # opens http://localhost:8501
 - Read `README.md` and the relevant files before changing anything.
 - Do not modify unrelated files. Do not delete or overwrite existing documentation; update docs (this file, README) when behavior changes.
 - Do not commit or push unless explicitly asked.
-- **Next milestone (AI):** file upload (PDF/TXT) -> extract text -> generate questions that follow the schema above -> feed them to `new_game(questions)`. Mock first; a real LLM call needs an explicit decision on API key and cost. Keep AI output validated with `question_bank.validate_questions`.
+- **Next milestone (AI):** human review of generated questions, a reliability check, then feed approved questions to `new_game(questions)`. Keep AI output validated (`question_bank.validate_question` is already applied in `qgen/generate.py`).
 - **Never write test data into `data/attempts.jsonl`** (it must contain real players only): tests set the `CONQUEST_ATTEMPTS_PATH` environment variable to a temporary file. Playing the game locally also appends there, so decide before committing that file (it is not git-ignored yet).
 - Update sections 5 and 6 of this file whenever a feature moves from planned to implemented.

@@ -20,12 +20,15 @@ from game_logic import PLAYER, PLAYERS
 from map_geometry import MAP
 from qgen.chunking import DEFAULT_MAX_WORDS, DEFAULT_OVERLAP_WORDS, chunk_document
 from qgen.extract import ExtractionError, extract_document
+from qgen.generate import generate_questions
+from qgen.providers import ProviderError, provider_from_env
 from question_bank import load_question_bank
 from styles import build_css
 
 st.set_page_config(page_title="Conquest", page_icon="🏰", layout="wide")
 
 DIFFICULTY_ORDER = ["easy", "medium", "hard"]
+DIFFICULTY_HE = {"easy": "קל", "medium": "בינוני", "hard": "קשה"}
 
 # The interactive world map is a small custom component (plain HTML/JS, no build step).
 world_map = components.declare_component(
@@ -544,7 +547,7 @@ def render_materials():
     st.markdown(
         '<div class="panel"><div class="panel-title">העלאת חומר לימוד</div>'
         '<div class="empty-hint">העלו קובץ PDF או TXT כדי לראות את הטקסט שחולץ ממנו ואת החלוקה למקטעים. '
-        "בשלב הזה עדיין לא נוצרות שאלות, והקובץ אינו נשמר.</div></div>",
+        "אפשר גם ליצור מהם שאלות לבדיקה (בלשונית האחרונה). הקובץ אינו נשמר.</div></div>",
         unsafe_allow_html=True,
     )
     uploaded = st.file_uploader("בחרו קובץ PDF או TXT", type=["pdf", "txt"], key="material_file")
@@ -574,11 +577,86 @@ def render_materials():
     )
     for warning in document["warnings"]:
         st.warning(warning)
-    chunks_tab, text_tab = st.tabs(["מקטעים", "הטקסט שחולץ"])
+    chunks_tab, text_tab, questions_tab = st.tabs(["מקטעים", "הטקסט שחולץ", "יצירת שאלות (ניסיוני)"])
     with chunks_tab:
         st.markdown(chunks_html(chunks), unsafe_allow_html=True)
     with text_tab:
         st.markdown(document_html(document), unsafe_allow_html=True)
+    with questions_tab:
+        render_question_generation(document, chunks)
+
+
+# ----------------------------------------------------------------------
+# Question generation (display and review only: NOT connected to the game)
+# ----------------------------------------------------------------------
+def run_generation(document, chunks, per_chunk):
+    """Run the generator and keep the result in session_state. Never raises."""
+    try:
+        provider = provider_from_env()
+    except ProviderError as error:
+        result = {"questions": [], "problems": [], "fatal": str(error)}
+        provider_name = ""
+    else:
+        provider_name = provider.name
+        bar = st.progress(0.0, text="מייצר שאלות...")
+        try:
+            result = generate_questions(
+                chunks, document, provider, per_chunk,
+                progress=lambda done, total: bar.progress(done / total, text=f"מקטע {done} מתוך {total}"),
+            )
+        except Exception:
+            logging.getLogger("conquest.qgen").exception("question generation failed")
+            result = {"questions": [], "problems": [], "fatal": "אירעה שגיאה לא צפויה ביצירת השאלות."}
+        bar.empty()
+    st.session_state.generated = {"document_id": document["document_id"], "provider": provider_name, "result": result}
+
+
+def generated_html(questions):
+    cards = ""
+    for q in questions:
+        options = ""
+        for option in q["options"]:
+            right = option == q["correct_answer"]
+            options += f'<div class="gen-option{" gen-right" if right else ""}">{"✓ " if right else ""}{esc(option)}</div>'
+        page = f'עמוד {q["source_page"]}' if q["source_page"] else "ללא עמודים"
+        cards += (
+            '<div class="chunk"><div class="q-meta">'
+            f'<span class="chip gold">{esc(q["topic"])}</span>'
+            f'<span class="chip">{DIFFICULTY_HE.get(q["difficulty"], q["difficulty"])}</span>'
+            f'<span class="chip">{page}</span><span class="chip">{esc(q["source_chunk_id"])}</span></div>'
+            f'<div class="chunk-text"><b>{esc(q["question"])}</b></div>{options}'
+            f'<div class="chunk-text"><b>הסבר:</b> {esc(q["explanation"])}</div>'
+            f'<div class="chunk-text"><b>ציטוט מהמקור:</b> “{esc(q["source_quote"])}”</div></div>'
+        )
+    return f'<div class="scrollbox">{cards}</div>'
+
+
+def render_question_generation(document, chunks):
+    st.markdown(
+        '<div class="empty-hint">השאלות נוצרות על ידי מודל שפה מקומי (Ollama) מתוך המקטעים בלבד, '
+        "ומוצגות לבדיקה בלבד. הן עדיין לא נכנסות למשחק. בדקו כל שאלה מול הציטוט שלה.</div>",
+        unsafe_allow_html=True,
+    )
+    count = st.slider("מספר מקטעים ליצירה (מהראשון)", 1, min(len(chunks), 10), min(len(chunks), 3))
+    per_chunk = st.slider("שאלות לכל מקטע", 1, 3, 2)
+    if st.button("יצירת שאלות מהמקטעים", key="generate_btn"):
+        run_generation(document, chunks[:count], per_chunk)
+    saved = st.session_state.get("generated")
+    if not saved or saved["document_id"] != document["document_id"]:
+        return
+    result = saved["result"]
+    if result["fatal"]:
+        st.error(result["fatal"])
+    if result["questions"]:
+        count_text = "נוצרה שאלה תקינה אחת" if len(result["questions"]) == 1 else f"נוצרו {len(result['questions'])} שאלות תקינות"
+        st.success(f"{count_text} ({saved['provider']}).")
+        st.markdown(generated_html(result["questions"]), unsafe_allow_html=True)
+    elif not result["fatal"]:
+        st.warning("לא נוצרו שאלות תקינות.")
+    if result["problems"]:
+        with st.expander(f"שאלות או מקטעים שנדחו ({len(result['problems'])})"):
+            for problem in result["problems"]:
+                st.write("• " + problem)
 
 
 # ======================================================================
