@@ -18,6 +18,8 @@
 app.py             Streamlit UI: draws the screens (menu, map, question, result, end), wires buttons and map events
 game_logic.py      Pure game rules/state (no Streamlit): territories, attacks, scoring, opponents, win/lose
 question_bank.py   Loads + validates questions (only place that knows where questions come from)
+qgen/extract.py    Text extraction from uploaded PDF/TXT (pypdf), page numbers kept, Hebrew error messages (no Streamlit)
+qgen/chunking.py   Splits extracted text into overlapping chunks that remember page + character position (no Streamlit)
 attempts.py        Appends each REAL answer attempt to data/attempts.jsonl (anonymous, never raises)
 styles.py          All page CSS (palette variables)
 map_geometry.py    Generates the world map shapes + territory adjacency (pure Python, computed at import)
@@ -31,7 +33,7 @@ requirements.txt   Dependencies (streamlit>=1.40)
 Question schema (the contract for any future question source, e.g. AI): `id, question, options (exactly 4), correct_answer (exact text of one option), explanation, topic, difficulty (easy|medium|hard), points`.
 
 ## 4. Tech Stack
-- Python, Streamlit (UI, session state), Git/GitHub.
+- Python, Streamlit (UI, session state), `pypdf` (PDF text extraction), Git/GitHub.
 - No other libraries. No database, no AI/API client.
 
 ## 5. Implemented So Far
@@ -43,13 +45,14 @@ Question schema (the contract for any future question source, e.g. AI): `id, que
 - 3 SCRIPTED demo opponents (עידו, מאיה, תמר), labeled "הדגמה" in the UI; one may capture a territory after each attack (chance in `OPPONENT_MOVE_CHANCE`, tuned by simulation).
 - End: victory = hold 9 of 16 territories, or finish with the top score when attacks run out; defeat otherwise (or if a demo opponent gets 9). End screen with "משחק חוזר".
 - Questions are loaded from JSON, validated, and passed into the game as plain dicts.
+- Upload screen (menu -> "העלאת חומר לימוד"): upload a PDF or TXT, see the extracted text (with page markers) and the chunks (page range, word count, overlap). Nothing is saved and no questions are generated yet. Bad files (empty, corrupt, encrypted, scanned/image-only, binary, too big/long) give a clear Hebrew message. Chunks are exact substrings of `full_text`, so a quote from a chunk can always be located again. Known limitation: lines that mix Hebrew with English/numbers can come out of PDFs in scrambled order (the screen warns about it); scanned PDFs need OCR, which does not exist.
 - Data collection for the future ML model: every answer by the real player is appended to `data/attempts.jsonl` (fields: schema_version, attempt_id, player_id, session_id, timestamp, question_id, topic, difficulty, chosen_option, is_correct, response_time_ms). Simulated opponents are never recorded. ids are random (player_id per browser session, session_id per game); response time is measured on the server from the first display of the question. A save failure shows a warning and the game continues. Duplicate attempts are ignored.
 - State lives in `st.session_state` only (a full browser reload starts over).
 
 ## 6. Planned, NOT Implemented
 Do not assume any of these exist:
-- File upload (PDF / text) and text extraction
-- AI question generation (LLM/API calls) - only the JSON bank exists
+- DOCX/PPTX upload and OCR for scanned PDFs
+- AI question generation (LLM/API calls), source references on questions, reliability checks - only the JSON bank exists. Next: `qgen/llm.py`, `generate.py`, `verify.py`
 - Real multiplayer, study groups, login/accounts, database/persistence
 - Adjacency-based rules (attack only neighbors, region bonuses, defending borders) - the data exists, the rules do not. Defending, real players.
 - Automated tests in the repo, per-topic progress tracking

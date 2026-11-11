@@ -162,6 +162,20 @@ h1, h2, h3, p, label, span, div { font-family: 'Heebo', sans-serif; }
 .rival { color: var(--muted); font-size: 0.92rem; margin-bottom: 1rem; }
 .rival b { color: var(--text); }
 
+/* ---------- Uploaded material: chunks and extracted text ---------- */
+.scrollbox { max-height: 620px; overflow-y: auto; padding: 0.3rem; }
+.chunk { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 0.8rem 1rem; margin-bottom: 0.7rem; }
+.chunk-text { white-space: pre-wrap; line-height: 1.75; font-size: 1rem; }
+.page-mark { text-align: center; color: var(--gold); font-weight: 700; font-size: 0.85rem; margin: 0.9rem 0 0.3rem; }
+.st-key-materials_btn { align-items: center; margin-top: 0.4rem; }
+[data-testid="stFileUploaderDropzone"] { background: var(--panel); border: 1.5px dashed var(--border); border-radius: 14px; color: var(--text); }
+[data-testid="stFileUploaderDropzone"] * { color: var(--text) !important; }
+[data-testid="stFileChip"] { background: var(--panel2) !important; border: 1px solid var(--border); border-radius: 10px; }
+[data-testid="stFileChip"] * { color: var(--text) !important; }
+[data-testid="stFileUploader"] label p { color: var(--muted); }
+[data-testid="stAlert"] { border-radius: 12px; }
+[data-testid="stAlert"] p, [data-testid="stAlert"] div { color: var(--text) !important; }
+
 /* ---------- Main menu ---------- */
 .hero { text-align: center; padding: 1.5rem 0 0.5rem; }
 .logo-icon { font-size: 3rem; color: var(--gold); filter: drop-shadow(0 0 18px rgba(245,185,66,0.5)); }
