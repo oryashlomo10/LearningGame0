@@ -7,11 +7,13 @@ all CSS is in styles.py. This file only draws screens and wires up buttons.
 
 import html
 import re
+import time
 from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
 
+import attempts
 import game_logic as gl
 from game_logic import PLAYER, PLAYERS
 from map_geometry import MAP
@@ -68,6 +70,10 @@ def start_game():
     st.session_state.game = gl.new_game(bank["questions"])
     st.session_state.course = bank["course"]
     st.session_state.view = "map"
+    # Anonymous ids for data collection: a new session_id for every game,
+    # one player_id for the whole browser session (random, not personal).
+    st.session_state.session_id = attempts.new_anonymous_id()
+    st.session_state.setdefault("player_id", attempts.new_anonymous_id())
 
 
 def go_menu():
@@ -95,12 +101,39 @@ def handle_map_event():
         attack_selected()
 
 
+def response_time_ms(game):
+    """Milliseconds since this question was first shown (None if unknown)."""
+    shown = st.session_state.get("question_shown")
+    if (shown and shown["session"] == st.session_state.get("session_id")
+            and shown["attack"] == game["attacks"]):
+        return int((time.monotonic() - shown["t"]) * 1000)
+    return None
+
+
+def log_attempt(game, question, chosen, correct, elapsed_ms):
+    """Save one real answer for the future ML model. Never breaks the game."""
+    try:
+        status, _ = attempts.save_attempt(
+            st.session_state.session_id, st.session_state.player_id, game["attacks"],
+            question, chosen, correct, elapsed_ms)
+    except Exception:                       # e.g. ids missing from the session
+        status = "error"
+    if status == "error":
+        st.session_state.attempt_save_error = True
+
+
 def submit_answer(answer_key):
     answer = st.session_state.get(answer_key)
     if answer is None:            # the button is disabled in this case, just be safe
         return
-    gl.submit_answer(st.session_state.game, answer)
+    game = st.session_state.game
+    current = game["current"]
+    if current is None:           # already answered (e.g. a double click): nothing to do or save
+        return
+    question, elapsed_ms = current["question"], response_time_ms(game)
+    result = gl.submit_answer(game, answer)
     st.session_state.view = "result"
+    log_attempt(game, question, answer, result["correct"], elapsed_ms)
 
 
 def continue_after_result():
@@ -322,6 +355,14 @@ def render_question():
     question = current["question"]
     territory = gl.get_territory(game, current["territory_id"])
 
+    # Remember when this question was FIRST shown (reruns while the player picks
+    # an option must not reset it). Used to measure the response time.
+    shown = st.session_state.get("question_shown")
+    session_id = st.session_state.get("session_id")
+    if not shown or shown["session"] != session_id or shown["attack"] != game["attacks"]:
+        st.session_state.question_shown = {
+            "session": session_id, "attack": game["attacks"], "t": time.monotonic()}
+
     render_topbar(game)
     _, center, _ = st.columns([1, 4, 1])
     with center:
@@ -369,6 +410,8 @@ def render_result():
     game = st.session_state.game
     result = game["last_result"]
     render_topbar(game)
+    if st.session_state.pop("attempt_save_error", False):
+        st.warning("לא הצלחנו לשמור את נתוני המענה הזה. המשחק ממשיך כרגיל.")
     _, center, _ = st.columns([1, 4, 1])
     with center:
         if result["correct"]:

@@ -18,10 +18,12 @@
 app.py             Streamlit UI: draws the screens (menu, map, question, result, end), wires buttons and map events
 game_logic.py      Pure game rules/state (no Streamlit): territories, attacks, scoring, opponents, win/lose
 question_bank.py   Loads + validates questions (only place that knows where questions come from)
+attempts.py        Appends each REAL answer attempt to data/attempts.jsonl (anonymous, never raises)
 styles.py          All page CSS (palette variables)
 map_geometry.py    Generates the world map shapes + territory adjacency (pure Python, computed at import)
 components/world_map/index.html   Custom Streamlit component (plain HTML/JS, no build): draws and handles clicks on the SVG map
 data/questions.json   24 sample Hebrew CS questions (course "מבוא למדעי המחשב")
+data/attempts.jsonl  Collected answer attempts (one JSON line each) - real players only
 data/README.md     Notes about the data folder
 requirements.txt   Dependencies (streamlit>=1.40)
 .gitignore, README.md (Hebrew project definition), CLAUDE.md
@@ -41,6 +43,7 @@ Question schema (the contract for any future question source, e.g. AI): `id, que
 - 3 SCRIPTED demo opponents (עידו, מאיה, תמר), labeled "הדגמה" in the UI; one may capture a territory after each attack (chance in `OPPONENT_MOVE_CHANCE`, tuned by simulation).
 - End: victory = hold 9 of 16 territories, or finish with the top score when attacks run out; defeat otherwise (or if a demo opponent gets 9). End screen with "משחק חוזר".
 - Questions are loaded from JSON, validated, and passed into the game as plain dicts.
+- Data collection for the future ML model: every answer by the real player is appended to `data/attempts.jsonl` (fields: schema_version, attempt_id, player_id, session_id, timestamp, question_id, topic, difficulty, chosen_option, is_correct, response_time_ms). Simulated opponents are never recorded. ids are random (player_id per browser session, session_id per game); response time is measured on the server from the first display of the question. A save failure shows a warning and the game continues. Duplicate attempts are ignored.
 - State lives in `st.session_state` only (a full browser reload starts over).
 
 ## 6. Planned, NOT Implemented
@@ -79,4 +82,5 @@ streamlit run app.py        # opens http://localhost:8501
 - Do not modify unrelated files. Do not delete or overwrite existing documentation; update docs (this file, README) when behavior changes.
 - Do not commit or push unless explicitly asked.
 - **Next milestone (AI):** file upload (PDF/TXT) -> extract text -> generate questions that follow the schema above -> feed them to `new_game(questions)`. Mock first; a real LLM call needs an explicit decision on API key and cost. Keep AI output validated with `question_bank.validate_questions`.
+- **Never write test data into `data/attempts.jsonl`** (it must contain real players only): tests set the `CONQUEST_ATTEMPTS_PATH` environment variable to a temporary file. Playing the game locally also appends there, so decide before committing that file (it is not git-ignored yet).
 - Update sections 5 and 6 of this file whenever a feature moves from planned to implemented.
