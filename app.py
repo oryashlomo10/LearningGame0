@@ -6,15 +6,20 @@ all CSS is in styles.py. This file only draws screens and wires up buttons.
 """
 
 import html
+import logging
 import re
+import time
 from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
 
+import attempts
 import game_logic as gl
 from game_logic import PLAYER, PLAYERS
 from map_geometry import MAP
+from qgen.chunking import DEFAULT_MAX_WORDS, DEFAULT_OVERLAP_WORDS, chunk_document
+from qgen.extract import ExtractionError, extract_document
 from question_bank import load_question_bank
 from styles import build_css
 
@@ -68,10 +73,18 @@ def start_game():
     st.session_state.game = gl.new_game(bank["questions"])
     st.session_state.course = bank["course"]
     st.session_state.view = "map"
+    # Anonymous ids for data collection: a new session_id for every game,
+    # one player_id for the whole browser session (random, not personal).
+    st.session_state.session_id = attempts.new_anonymous_id()
+    st.session_state.setdefault("player_id", attempts.new_anonymous_id())
 
 
 def go_menu():
     st.session_state.view = "menu"
+
+
+def go_materials():
+    st.session_state.view = "materials"
 
 
 def select_territory(territory_id):
@@ -95,12 +108,39 @@ def handle_map_event():
         attack_selected()
 
 
+def response_time_ms(game):
+    """Milliseconds since this question was first shown (None if unknown)."""
+    shown = st.session_state.get("question_shown")
+    if (shown and shown["session"] == st.session_state.get("session_id")
+            and shown["attack"] == game["attacks"]):
+        return int((time.monotonic() - shown["t"]) * 1000)
+    return None
+
+
+def log_attempt(game, question, chosen, correct, elapsed_ms):
+    """Save one real answer for the future ML model. Never breaks the game."""
+    try:
+        status, _ = attempts.save_attempt(
+            st.session_state.session_id, st.session_state.player_id, game["attacks"],
+            question, chosen, correct, elapsed_ms)
+    except Exception:                       # e.g. ids missing from the session
+        status = "error"
+    if status == "error":
+        st.session_state.attempt_save_error = True
+
+
 def submit_answer(answer_key):
     answer = st.session_state.get(answer_key)
     if answer is None:            # the button is disabled in this case, just be safe
         return
-    gl.submit_answer(st.session_state.game, answer)
+    game = st.session_state.game
+    current = game["current"]
+    if current is None:           # already answered (e.g. a double click): nothing to do or save
+        return
+    question, elapsed_ms = current["question"], response_time_ms(game)
+    result = gl.submit_answer(game, answer)
     st.session_state.view = "result"
+    log_attempt(game, question, answer, result["correct"], elapsed_ms)
 
 
 def continue_after_result():
@@ -211,6 +251,8 @@ def render_menu():
     )
     with st.container(key="start_btn"):
         st.button("התחלת משחק", type="primary", key="start_game", on_click=start_game)
+    with st.container(key="materials_btn"):
+        st.button("העלאת חומר לימוד", key="open_materials", on_click=go_materials)
     st.markdown(
         '<div class="steps-title">איך זה עובד</div>'
         f'<div class="steps">{cards}</div>'
@@ -357,6 +399,14 @@ def render_question():
     territory = gl.get_territory(game, current["territory_id"])
     defending = current["kind"] == "defend"
 
+    # Remember when this question was FIRST shown (reruns while the player picks
+    # an option must not reset it). Used to measure the response time.
+    shown = st.session_state.get("question_shown")
+    session_id = st.session_state.get("session_id")
+    if not shown or shown["session"] != session_id or shown["attack"] != game["attacks"]:
+        st.session_state.question_shown = {
+            "session": session_id, "attack": game["attacks"], "t": time.monotonic()}
+
     render_topbar(game)
     _, center, _ = st.columns([1, 4, 1])
     with center:
@@ -416,6 +466,8 @@ def render_result():
     game = st.session_state.game
     result = game["last_result"]
     render_topbar(game)
+    if st.session_state.pop("attempt_save_error", False):
+        st.warning("לא הצלחנו לשמור את נתוני המענה הזה. המשחק ממשיך כרגיל.")
     _, center, _ = st.columns([1, 4, 1])
     with center:
         name = esc(result["territory_name"])
@@ -502,6 +554,97 @@ def render_end():
 
 
 # ======================================================================
+# Screen: upload study material (stage 2: extraction and chunking only)
+# ======================================================================
+@st.cache_data(show_spinner=False, ttl=900, max_entries=4)
+def process_material(data, name, max_words, overlap_words):
+    """Extract and chunk an uploaded file. Returns {"error": ...} or {"document", "chunks"}.
+
+    Cached for a few minutes only so that the screen can rerun without
+    re-reading the file. Nothing is written to disk.
+    """
+    try:
+        document = extract_document(data, name)
+        return {"document": document, "chunks": chunk_document(document, max_words, overlap_words)}
+    except ExtractionError as error:
+        return {"error": str(error)}
+    except Exception:                       # a bug or a very odd file: do not crash the app
+        logging.getLogger("conquest.qgen").exception("unexpected error while processing %s", name)
+        return {"error": "אירעה שגיאה לא צפויה בעיבוד הקובץ. נסו קובץ אחר."}
+
+
+def page_label(start, end):
+    if start is None:
+        return "ללא עמודים (קובץ טקסט)"
+    return f"עמוד {start}" if start == end else f"עמודים {start}–{end}"
+
+
+def chunks_html(chunks):
+    cards = ""
+    for chunk in chunks:
+        overlap = f'<span class="chip">חפיפה: {chunk["overlap_words"]} מילים</span>' if chunk["overlap_words"] else ""
+        cards += (
+            '<div class="chunk"><div class="q-meta">'
+            f'<span class="chip gold">מקטע {chunk["index"] + 1}</span>'
+            f'<span class="chip">{page_label(chunk["page_start"], chunk["page_end"])}</span>'
+            f'<span class="chip">{chunk["word_count"]} מילים</span>{overlap}</div>'
+            f'<div class="chunk-text">{esc(chunk["text"])}</div></div>'
+        )
+    return f'<div class="scrollbox">{cards}</div>'
+
+
+def document_html(document):
+    parts = ""
+    for page in document["pages"]:
+        if page["page"] is not None:
+            parts += f'<div class="page-mark">— עמוד {page["page"]} —</div>'
+        parts += f'<div class="chunk-text">{esc(page["text"]) if page["text"] else "(אין טקסט בעמוד הזה)"}</div>'
+    return f'<div class="scrollbox">{parts}</div>'
+
+
+def render_materials():
+    st.button("→ חזרה למסך הראשי", key="materials_back", on_click=go_menu)
+    st.markdown(
+        '<div class="panel"><div class="panel-title">העלאת חומר לימוד</div>'
+        '<div class="empty-hint">העלו קובץ PDF או TXT כדי לראות את הטקסט שחולץ ממנו ואת החלוקה למקטעים. '
+        "בשלב הזה עדיין לא נוצרות שאלות, והקובץ אינו נשמר.</div></div>",
+        unsafe_allow_html=True,
+    )
+    uploaded = st.file_uploader("בחרו קובץ PDF או TXT", type=["pdf", "txt"], key="material_file")
+    with st.expander("הגדרות חלוקה למקטעים"):
+        max_words = st.slider("גודל מקטע (מילים)", 60, 400, DEFAULT_MAX_WORDS, step=10)
+        overlap_words = st.slider("חפיפה בין מקטעים (מילים)", 0, 100, DEFAULT_OVERLAP_WORDS, step=5)
+        overlap_words = min(overlap_words, max_words // 2)        # the splitter requires this
+    if uploaded is None:
+        st.info("עדיין לא נבחר קובץ.")
+        return
+
+    result = process_material(uploaded.getvalue(), uploaded.name, max_words, overlap_words)
+    if "error" in result:
+        st.error(result["error"])
+        return
+    document, chunks = result["document"], result["chunks"]
+    stats = document["stats"]
+    average = round(sum(c["word_count"] for c in chunks) / len(chunks)) if chunks else 0
+    st.markdown(
+        '<div class="stats">'
+        + stat_tile("קובץ", f'<span style="font-size:1rem">{esc(document["document_name"])}</span>')
+        + stat_tile("עמודים", stats["page_count"] if stats["page_count"] else "—")
+        + stat_tile("מילים", stats["word_count"])
+        + stat_tile("מקטעים", len(chunks), f"· ממוצע {average} מילים")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+    for warning in document["warnings"]:
+        st.warning(warning)
+    chunks_tab, text_tab = st.tabs(["מקטעים", "הטקסט שחולץ"])
+    with chunks_tab:
+        st.markdown(chunks_html(chunks), unsafe_allow_html=True)
+    with text_tab:
+        st.markdown(document_html(document), unsafe_allow_html=True)
+
+
+# ======================================================================
 # Main
 # ======================================================================
 st.markdown(build_css(), unsafe_allow_html=True)
@@ -515,7 +658,8 @@ SCREENS = {
     "question": render_question,
     "result": render_result,
     "end": render_end,
+    "materials": render_materials,
 }
-if st.session_state.view != "menu" and st.session_state.game is None:
+if st.session_state.view not in ("menu", "materials") and st.session_state.game is None:
     st.session_state.view = "menu"      # e.g. session was reset
 SCREENS[st.session_state.view]()
