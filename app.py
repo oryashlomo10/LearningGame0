@@ -112,16 +112,20 @@ def response_time_ms(game):
     """Milliseconds since this question was first shown (None if unknown)."""
     shown = st.session_state.get("question_shown")
     if (shown and shown["session"] == st.session_state.get("session_id")
-            and shown["attack"] == game["attacks"]):
+            and shown["attack"] == game["questions_asked"]):
         return int((time.monotonic() - shown["t"]) * 1000)
     return None
 
 
-def log_attempt(game, question, chosen, correct, elapsed_ms):
-    """Save one real answer for the future ML model. Never breaks the game."""
+def log_attempt(question_number, question, chosen, correct, elapsed_ms):
+    """Save one real answer for the future ML model. Never breaks the game.
+
+    question_number is game["questions_asked"] of the answered question
+    (unique for attacks AND defenses, so a defense is not seen as a duplicate).
+    """
     try:
         status, _ = attempts.save_attempt(
-            st.session_state.session_id, st.session_state.player_id, game["attacks"],
+            st.session_state.session_id, st.session_state.player_id, question_number,
             question, chosen, correct, elapsed_ms)
     except Exception:                       # e.g. ids missing from the session
         status = "error"
@@ -138,9 +142,10 @@ def submit_answer(answer_key):
     if current is None:           # already answered (e.g. a double click): nothing to do or save
         return
     question, elapsed_ms = current["question"], response_time_ms(game)
+    number = game["questions_asked"]   # read before answering: an opponent may open a defense
     result = gl.submit_answer(game, answer)
     st.session_state.view = "result"
-    log_attempt(game, question, answer, result["correct"], elapsed_ms)
+    log_attempt(number, question, answer, result["correct"], elapsed_ms)
 
 
 def continue_after_result():
@@ -403,9 +408,9 @@ def render_question():
     # an option must not reset it). Used to measure the response time.
     shown = st.session_state.get("question_shown")
     session_id = st.session_state.get("session_id")
-    if not shown or shown["session"] != session_id or shown["attack"] != game["attacks"]:
+    if not shown or shown["session"] != session_id or shown["attack"] != game["questions_asked"]:
         st.session_state.question_shown = {
-            "session": session_id, "attack": game["attacks"], "t": time.monotonic()}
+            "session": session_id, "attack": game["questions_asked"], "t": time.monotonic()}
 
     render_topbar(game)
     _, center, _ = st.columns([1, 4, 1])
