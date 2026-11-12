@@ -76,6 +76,7 @@ h1, h2, h3, p, label, span, div { font-family: 'Heebo', sans-serif; }
   background: rgba(255,255,255,0.06); border: 1px solid var(--border); color: var(--muted); }
 .chip.live { color: var(--good); border-color: rgba(52,211,153,.45); background: rgba(52,211,153,.08); }
 .chip.gold { color: var(--gold); border-color: rgba(245,185,66,.5); background: rgba(245,185,66,.08); }
+.chip.red { color: var(--bad); border-color: rgba(240,97,109,.5); background: rgba(240,97,109,.08); }
 .profile { display: flex; align-items: center; gap: 0.55rem; }
 .avatar { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
   font-weight: 800; color: #05201c; background: linear-gradient(160deg, #5eead4, #14b8a6); box-shadow: 0 0 14px rgba(45,212,191,.5); }
@@ -84,6 +85,7 @@ h1, h2, h3, p, label, span, div { font-family: 'Heebo', sans-serif; }
 
 /* ---------- Stats ---------- */
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.8rem; margin-bottom: 0.8rem; }
+.stats.six { grid-template-columns: repeat(3, 1fr); }
 .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 0.75rem 1rem; }
 .stat-label { color: var(--muted); font-size: 0.82rem; font-weight: 600; }
 .stat-value { font-size: 1.8rem; font-weight: 900; line-height: 1.2; }
@@ -104,6 +106,7 @@ h1, h2, h3, p, label, span, div { font-family: 'Heebo', sans-serif; }
 .legend { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 0.7rem; color: var(--muted); font-size: 0.85rem; }
 .legend span.dot { display: inline-block; width: 12px; height: 12px; border-radius: 4px; margin-left: 0.4rem; vertical-align: -1px; }
 .legend .stone { background: #5d6a5f; }
+.legend .dashed { background: transparent; border: 2px dashed var(--gold); box-sizing: border-box; }
 
 /* ---------- Side panels ---------- */
 .panel { background: linear-gradient(180deg, var(--panel2), var(--panel)); border: 1px solid var(--border); border-radius: 16px; padding: 1rem 1.1rem; margin-bottom: 0.9rem; }
@@ -161,6 +164,15 @@ h1, h2, h3, p, label, span, div { font-family: 'Heebo', sans-serif; }
 .explain b { color: var(--gold); }
 .rival { color: var(--muted); font-size: 0.92rem; margin-bottom: 1rem; }
 .rival b { color: var(--text); }
+.rival.alert { color: var(--text); background: rgba(240,97,109,0.10); border: 1px solid rgba(240,97,109,0.5); border-radius: 10px; padding: 0.7rem 1rem; }
+/* knowledge regions panel */
+.rg-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.5rem; border-radius: 8px; font-size: 0.86rem; }
+.rg-row.me { background: rgba(45,212,191,0.12); }
+.rg-dots { display: inline-flex; flex-shrink: 0; }
+.rg-dots .owner-dot { margin-left: 0.2rem; }
+.rg-name { flex: 1; }
+.rg-bonus { font-weight: 800; font-size: 0.8rem; white-space: nowrap; }
+.rg-open { color: var(--muted); font-size: 0.78rem; }
 
 /* ---------- Uploaded material: chunks and extracted text ---------- */
 .scrollbox { max-height: 620px; overflow-y: auto; padding: 0.3rem; }
