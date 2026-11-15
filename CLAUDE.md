@@ -39,11 +39,14 @@ Question schema (the contract for any future question source, e.g. AI): `id, que
 ## 5. Implemented So Far
 - Main menu (Hebrew RTL, game identity) with a working "התחלת משחק" button.
 - Playable single-player demo on an interactive WORLD MAP: 16 irregular territories (14 mainland regions + 2 islands linked by sea lanes), organic coastline, mountains/forests/hills/rivers, owner colors (player teal with glow, opponents red/purple/orange, neutral stone with hatching), hover tooltip, gold selection outline, conquest flash animation, compass. Plus legend, stats row, progress bars, leaderboard, battle log.
-- Every territory has real `neighbors` (symmetric adjacency from the geometry, `game_logic.neighbors_of`). It is shown in the side panel but NOT used by the attack rules yet (you can still attack any non-owned territory).
-- Attack flow: select territory -> attack -> 4-option question (difficulty matches territory) -> submit (disabled until an answer is chosen) -> result with explanation -> back to map.
-- Rules: easy/medium/hard territories worth 10/20/30; 12 attacks per game; cannot attack own territory; a correct answer captures the territory, a wrong one wastes the attack.
-- 3 SCRIPTED demo opponents (עידו, מאיה, תמר), labeled "הדגמה" in the UI; one may capture a territory after each attack (chance in `OPPONENT_MOVE_CHANCE`, tuned by simulation).
-- End: victory = hold 9 of 16 territories, or finish with the top score when attacks run out; defeat otherwise (or if a demo opponent gets 9). End screen with "משחק חוזר".
+- Every territory has real `neighbors` (symmetric adjacency from the geometry, `game_logic.neighbors_of`).
+- **Knowledge regions:** `REGIONS` in `game_logic.py` groups the 16 territories into 8 regions of 2 bordering territories; each region is one course topic. A territory only asks questions of its region's topic (`pick_question`: same topic + difficulty, then same topic, then the oldest-used question of the topic is recycled; a topic missing from the bank falls back to difficulty). Holding a whole region = `REGION_BONUS` (+20) points. No player starts with a whole region. Side panel "אזורי ידע" shows them.
+- **Adjacency rule:** you may only attack a territory that borders one of yours (islands through sea lanes). If you own nothing you may attack anywhere. Attackable territories get a dashed gold outline on the map (`attackable` in `map_state`).
+- **Defense:** after each attack the demo opponents get `OPPONENT_MOVES` (2) moves, each with chance `OPPONENT_MOVE_CHANCE`, only against territories next to their own land. A neutral territory is taken at once; an attack on yours opens a defense question (`game["current"]["kind"] == "defend"`, does not cost an attack). Correct = you keep it, wrong = the opponent takes it. At most one defense per turn. Flow: attack result screen -> "להגנה" button -> question screen -> defense result -> map.
+- Rules: easy/medium/hard territories worth 10/20/30; 12 attacks per game; cannot attack own territory; a correct answer captures the territory, a wrong one wastes the attack. Score = territory points + region bonuses.
+- Balance (simulated, 3000 games per row): random guessing wins ~0%, 50% correct ~15-35%, 75% correct ~90-97%. Re-run a simulation after changing any rule constant.
+- 3 SCRIPTED demo opponents (עידו, מאיה, תמר), labeled "הדגמה" in the UI.
+- End: victory = hold 9 of 16 territories, or finish with the top score when attacks run out; defeat otherwise (or if a demo opponent gets 9). A pending defense is answered before the game ends. End screen with "משחק חוזר", including successful defenses and full regions.
 - Questions are loaded from JSON, validated, and passed into the game as plain dicts.
 - Upload screen (menu -> "העלאת חומר לימוד"): upload a PDF or TXT, see the extracted text (with page markers) and the chunks (page range, word count, overlap). Nothing is saved and no questions are generated yet. Bad files (empty, corrupt, encrypted, scanned/image-only, binary, too big/long) give a clear Hebrew message. Chunks are exact substrings of `full_text`, so a quote from a chunk can always be located again. Known limitation: lines that mix Hebrew with English/numbers can come out of PDFs in scrambled order (the screen warns about it); scanned PDFs need OCR, which does not exist.
 - Data collection for the future ML model: every answer by the real player is appended to `data/attempts.jsonl` (fields: schema_version, attempt_id, player_id, session_id, timestamp, question_id, topic, difficulty, chosen_option, is_correct, response_time_ms). Simulated opponents are never recorded. ids are random (player_id per browser session, session_id per game); response time is measured on the server from the first display of the question. A save failure shows a warning and the game continues. Duplicate attempts are ignored.
@@ -54,7 +57,8 @@ Do not assume any of these exist:
 - DOCX/PPTX upload and OCR for scanned PDFs
 - AI question generation (LLM/API calls), source references on questions, reliability checks - only the JSON bank exists. Next: `qgen/llm.py`, `generate.py`, `verify.py`
 - Real multiplayer, study groups, login/accounts, database/persistence
-- Adjacency-based rules (attack only neighbors, region bonuses, defending borders) - the data exists, the rules do not. Defending, real players.
+- Smarter opponents (personalities, opponents attacking each other), real players.
+- 3D board (planned next: tilted tabletop map, relief height = difficulty, built from the `map_geometry.py` shapes).
 - Automated tests in the repo, per-topic progress tracking
 
 ## 7. Conventions & Guidelines
@@ -62,7 +66,9 @@ Do not assume any of these exist:
 - Keep code simple and beginner-friendly: clear names, short functions, comments only where useful.
 - Keep the layers separate: rules in `game_logic.py` (no `st.` calls), questions in `question_bank.py`, CSS in `styles.py`, drawing in `app.py`. Never hardcode questions in game logic.
 - **The map is a custom component**, not Streamlit buttons: `app.py` sends `{geo: map_geometry.MAP, state: map_state(game)}` to `components/world_map/index.html`; clicks come back as `{type: "select" | "attack", id, n}` and are handled in `handle_map_event` (an `on_change` callback, so state is updated before the rerun). The SVG is built once in JS and only recolored on later renders.
-- Territory ids are the contract between `map_geometry.py` (shapes: seeds 0-13, islands 14-15) and `TERRITORY_DEFS` / `START_OWNERS` in `game_logic.py`. Change them together.
+- Territory ids are the contract between `map_geometry.py` (shapes: seeds 0-13, islands 14-15) and `TERRITORY_DEFS` / `START_OWNERS` / `REGIONS` in `game_logic.py`. Change them together.
+- Region topics in `REGIONS` must be spelled exactly like the `topic` field of the questions. Every region/difficulty pair should have at least one question in the bank (the bank itself is Shira's area; tell her when a topic needs more questions).
+- A question can be an attack or a defense: use `game["questions_asked"]` (not `game["attacks"]`) when something must be unique per question, e.g. widget keys.
 - After changing seeds or noise in `map_geometry.py`, check that no outline self-intersects (a spike or loop on the coast) and look at the map in a browser. Territory shapes are weighted Voronoi cells; borders are bent by a function of position so neighbors always share the exact same border.
 - Page CSS selectors (styles.py) depend on the Streamlit version (`data-testid`s). After changing `styles.py`, restart the server (it can serve a stale copy) and check the result visually.
 - Build HTML strings without blank lines or 4-space-indented lines (markdown would break them) and escape dynamic text (`esc()` / `rich()` in `app.py`).

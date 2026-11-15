@@ -112,16 +112,20 @@ def response_time_ms(game):
     """Milliseconds since this question was first shown (None if unknown)."""
     shown = st.session_state.get("question_shown")
     if (shown and shown["session"] == st.session_state.get("session_id")
-            and shown["attack"] == game["attacks"]):
+            and shown["attack"] == game["questions_asked"]):
         return int((time.monotonic() - shown["t"]) * 1000)
     return None
 
 
-def log_attempt(game, question, chosen, correct, elapsed_ms):
-    """Save one real answer for the future ML model. Never breaks the game."""
+def log_attempt(question_number, question, chosen, correct, elapsed_ms):
+    """Save one real answer for the future ML model. Never breaks the game.
+
+    question_number is game["questions_asked"] of the answered question
+    (unique for attacks AND defenses, so a defense is not seen as a duplicate).
+    """
     try:
         status, _ = attempts.save_attempt(
-            st.session_state.session_id, st.session_state.player_id, game["attacks"],
+            st.session_state.session_id, st.session_state.player_id, question_number,
             question, chosen, correct, elapsed_ms)
     except Exception:                       # e.g. ids missing from the session
         status = "error"
@@ -138,13 +142,18 @@ def submit_answer(answer_key):
     if current is None:           # already answered (e.g. a double click): nothing to do or save
         return
     question, elapsed_ms = current["question"], response_time_ms(game)
+    number = game["questions_asked"]   # read before answering: an opponent may open a defense
     result = gl.submit_answer(game, answer)
     st.session_state.view = "result"
-    log_attempt(game, question, answer, result["correct"], elapsed_ms)
+    log_attempt(number, question, answer, result["correct"], elapsed_ms)
 
 
 def continue_after_result():
-    st.session_state.view = "end" if st.session_state.game["over"] else "map"
+    game = st.session_state.game
+    if game["current"] is not None:          # a demo opponent attacks you: defend
+        st.session_state.view = "question"
+    else:
+        st.session_state.view = "end" if game["over"] else "map"
 
 
 # ======================================================================
@@ -252,8 +261,9 @@ def render_menu():
     st.markdown(
         '<div class="steps-title">איך זה עובד</div>'
         f'<div class="steps">{cards}</div>'
-        f'<div class="footer">מצב הדגמה: {gl.MAX_ACTIONS} תקיפות · ניצחון בשליטה ב-{gl.MAJORITY} שטחים '
-        "או בסיום במקום הראשון · יריבים מדומים · שאלות לדוגמה</div>",
+        f'<div class="footer">מצב הדגמה: {gl.MAX_ACTIONS} תקיפות · תוקפים רק שטח שגובל בשטח שלך · '
+        f"כל אזור הוא נושא בקורס (אזור שלם = +{gl.REGION_BONUS}) · מגינים על שטחים בשאלת הגנה · "
+        f"ניצחון בשליטה ב-{gl.MAJORITY} שטחים או בסיום במקום הראשון · יריבים מדומים · שאלות לדוגמה</div>",
         unsafe_allow_html=True,
     )
 
@@ -265,6 +275,7 @@ def map_state(game):
     """Everything that changes during the game, as plain JSON for the map."""
     selected = game["selected"]
     allowed, reason = gl.can_attack(game, selected)
+    attackable = set(gl.attackable_ids(game))
     return {
         "territories": [
             {
@@ -275,6 +286,8 @@ def map_state(game):
                 "points": t["points"],
                 "pips": pips(t["difficulty"]),
                 "diffLabel": gl.DIFFICULTY_LABELS[t["difficulty"]],
+                "topic": t["topic"],
+                "attackable": t["id"] in attackable,
             }
             for t in game["territories"]
         ],
@@ -296,6 +309,7 @@ def render_board(game):
             f'<span><span class="dot" style="background:{PLAYERS[k]["color"]}"></span>{PLAYERS[k]["name"]} (הדגמה)</span>'
             for k in gl.OPPONENTS)
         + '<span><span class="dot stone"></span>שטח פנוי</span>'
+        '<span><span class="dot dashed"></span>אפשר לתקוף (גובל בשטח שלך)</span>'
         "<span>◆ קל · ◆◆ בינוני · ◆◆◆ קשה</span></div>",
         unsafe_allow_html=True,
     )
@@ -307,6 +321,7 @@ def render_selection_panel(game):
         st.markdown(
             '<div class="panel"><div class="panel-title">השטח הנבחר</div>'
             '<div class="empty-hint">לחצו על שטח במפה כדי לראות את פרטיו ולתקוף אותו. '
+            "אפשר לתקוף רק שטח שגובל בשטח שלך (מסומן בקו מקווקו). "
             "שטחים קשים מעניקים יותר נקודות – אבל הם גם מסוכנים יותר.</div></div>",
             unsafe_allow_html=True,
         )
@@ -316,6 +331,7 @@ def render_selection_panel(game):
         st.markdown(
             '<div class="panel"><div class="panel-title">השטח הנבחר</div>'
             f'<div class="sel-name">{esc(t["name"])}</div>'
+            f'<div class="sel-row"><span>נושא (אזור)</span><span>{esc(t["topic"])}</span></div>'
             f'<div class="sel-row"><span>בעלים</span><span><span class="owner-dot" style="background:{color}"></span>{esc(owner_name(t["owner"]))}</span></div>'
             f'<div class="sel-row"><span>קושי</span><span>{pips(t["difficulty"])} {gl.DIFFICULTY_LABELS[t["difficulty"]]}</span></div>'
             f'<div class="sel-row"><span>פרס בכיבוש</span><span style="color:var(--gold);font-weight:800">{t["points"]} נק׳</span></div>'
@@ -329,6 +345,28 @@ def render_selection_panel(game):
     if not allowed:
         st.markdown(f'<div class="reason">{esc(reason)}</div>', unsafe_allow_html=True)
     st.markdown("<div style='height:0.9rem'></div>", unsafe_allow_html=True)
+
+
+def render_regions(game):
+    """The 8 knowledge regions: a full region gives its holder a bonus."""
+    rows = ""
+    for region in gl.region_info(game):
+        dots = "".join(
+            f'<span class="owner-dot" style="background:{owner_color(t["owner"])}" title="{esc(t["name"])}"></span>'
+            for t in region["territories"])
+        holder = region["holder"]
+        if holder:
+            status = f'<span class="rg-bonus" style="color:{owner_color(holder)}">{esc(owner_name(holder))} +{gl.REGION_BONUS}</span>'
+        else:
+            status = '<span class="rg-open">פתוח</span>'
+        me = " me" if holder == PLAYER else ""
+        rows += f'<div class="rg-row{me}"><span class="rg-dots">{dots}</span><span class="rg-name">{esc(region["topic"])}</span>{status}</div>'
+    st.markdown(
+        '<div class="panel"><div class="panel-title">אזורי ידע</div>'
+        f'<div class="lb-note" style="margin:0 0 .4rem">כל אזור הוא נושא בקורס. שליטה בשני השטחים של אזור = +{gl.REGION_BONUS} נק׳.</div>'
+        + rows + "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_log(game):
@@ -349,6 +387,7 @@ def render_map():
     with side_col:
         render_selection_panel(game)
         render_leaderboard(game)
+        render_regions(game)
         render_log(game)
 
 
@@ -363,36 +402,49 @@ def render_question():
         st.rerun()
     question = current["question"]
     territory = gl.get_territory(game, current["territory_id"])
+    defending = current["kind"] == "defend"
 
     # Remember when this question was FIRST shown (reruns while the player picks
     # an option must not reset it). Used to measure the response time.
     shown = st.session_state.get("question_shown")
     session_id = st.session_state.get("session_id")
-    if not shown or shown["session"] != session_id or shown["attack"] != game["attacks"]:
+    if not shown or shown["session"] != session_id or shown["attack"] != game["questions_asked"]:
         st.session_state.question_shown = {
-            "session": session_id, "attack": game["attacks"], "t": time.monotonic()}
+            "session": session_id, "attack": game["questions_asked"], "t": time.monotonic()}
 
     render_topbar(game)
     _, center, _ = st.columns([1, 4, 1])
     with center:
         with st.container(key="question_card"):
+            if defending:
+                rival = PLAYERS[current["opponent"]]["name"]
+                first_chip = f'<span class="chip red">🛡️ הגנה מפני {esc(rival)} (הדגמה)</span>'
+                place = f"השטח שלך: {esc(territory['name'])}"
+            else:
+                first_chip = f'<span class="chip gold">אתגר {game["attacks"]} מתוך {gl.MAX_ACTIONS}</span>'
+                place = f"יעד: {esc(territory['name'])}"
             st.markdown(
                 '<div class="q-meta">'
-                f'<span class="chip gold">אתגר {game["attacks"]} מתוך {gl.MAX_ACTIONS}</span>'
-                f'<span class="chip">יעד: {esc(territory["name"])}</span>'
+                + first_chip
+                + f'<span class="chip">{place}</span>'
                 f'<span class="chip">{esc(question["topic"])}</span>'
                 f'<span class="chip">{pips(territory["difficulty"])} {gl.DIFFICULTY_LABELS[territory["difficulty"]]} · {territory["points"]} נק׳</span>'
                 "</div>"
                 f'<div class="q-text">{rich(question["question"])}</div>',
                 unsafe_allow_html=True,
             )
-            answer_key = f"answer_{game['attacks']}"      # new key for every question
+            answer_key = f"answer_{game['questions_asked']}"   # new key for every question
             choice = st.radio("בחרו תשובה", current["options"], index=None,
                               key=answer_key, label_visibility="collapsed")
             st.button("שליחת תשובה", type="primary", key="submit_btn",
                       disabled=choice is None, on_click=submit_answer,
                       args=(answer_key,), use_container_width=True)
-            hint = "בחרו תשובה כדי לשלוח." if choice is None else "ההתקפה כבר החלה – אין נסיגה."
+            if choice is None:
+                hint = "בחרו תשובה כדי לשלוח."
+            elif defending:
+                hint = "תשובה נכונה שומרת על השטח. ההגנה לא עולה תקיפה."
+            else:
+                hint = "ההתקפה כבר החלה – אין נסיגה."
             st.markdown(f'<div class="q-hint">{hint}</div>', unsafe_allow_html=True)
 
 
@@ -423,20 +475,31 @@ def render_result():
         st.warning("לא הצלחנו לשמור את נתוני המענה הזה. המשחק ממשיך כרגיל.")
     _, center, _ = st.columns([1, 4, 1])
     with center:
-        if result["correct"]:
+        name = esc(result["territory_name"])
+        if result["kind"] == "defend":
+            rival_name = esc(PLAYERS[result["opponent"]]["name"])
+            if result["correct"]:
+                banner = ('<div class="banner win"><div class="banner-title">תשובה נכונה – הגנת על השטח!</div>'
+                          f'<div class="banner-sub">{name} נשאר בשליטתך · {rival_name} (הדגמה) נהדף/ה</div></div>')
+            else:
+                banner = ('<div class="banner loss"><div class="banner-title">התשובה שגויה – השטח נפל</div>'
+                          f'<div class="banner-sub">{name} עבר לידי {rival_name} (הדגמה)</div></div>')
+        elif result["correct"]:
             banner = ('<div class="banner win"><div class="banner-title">תשובה נכונה – השטח נכבש!</div>'
-                      f'<div class="banner-sub">{esc(result["territory_name"])} עבר לשליטתך · +{result["points"]} נק׳</div></div>')
+                      f'<div class="banner-sub">{name} עבר לשליטתך · +{result["points"]} נק׳</div></div>')
         else:
             previous = result["previous_owner"]
             stays = "נשאר פנוי" if previous is None else f"נשאר בידי {owner_name(previous)}"
             banner = ('<div class="banner loss"><div class="banner-title">התשובה שגויה – ההתקפה נכשלה</div>'
-                      f'<div class="banner-sub">{esc(result["territory_name"])} {esc(stays)}</div></div>')
+                      f'<div class="banner-sub">{name} {esc(stays)}</div></div>')
         rival = ""
-        event = result["rival_event"]
-        if event:
-            verb = "השתלט/ה על" if event["took_from_player"] else "כבש/ה את"
-            rival = (f'<div class="rival">בינתיים במפה: <b>{esc(PLAYERS[event["opponent"]]["name"])}</b> '
-                     f'(יריב הדגמה) {verb} <b>{esc(event["territory_name"])}</b>.</div>')
+        for event in result["rival_events"]:
+            who = f'<b>{esc(PLAYERS[event["opponent"]]["name"])}</b> (יריב הדגמה)'
+            if event["kind"] == "attack_on_player":
+                rival += (f'<div class="rival alert">⚔️ {who} תוקף/ת את השטח שלך <b>{esc(event["territory_name"])}</b>! '
+                          "ענו נכון על שאלת הגנה כדי לשמור עליו.</div>")
+            else:
+                rival += f'<div class="rival">בינתיים במפה: {who} כבש/ה את <b>{esc(event["territory_name"])}</b>.</div>'
         st.markdown(
             banner
             + f'<div class="q-text" style="font-size:1.25rem">{rich(result["question"])}</div>'
@@ -445,7 +508,10 @@ def render_result():
             + rival,
             unsafe_allow_html=True,
         )
-        label = "לסיכום המשחק" if game["over"] else "חזרה למפה"
+        if game["current"] is not None:
+            label = "🛡️ להגנה על השטח"
+        else:
+            label = "לסיכום המשחק" if game["over"] else "חזרה למפה"
         st.button(label, type="primary", key="continue_btn",
                   on_click=continue_after_result, use_container_width=True)
 
@@ -480,8 +546,10 @@ def render_end():
         + stat_tile("ניקוד סופי", gl.score(game, PLAYER), "נק׳", "gold")
         + stat_tile("דירוג", f"#{gl.player_rank(game)}", f"מתוך {len(PLAYERS)}")
         + stat_tile("כיבושים מוצלחים", game["conquests"], f"/ {game['attacks']} תקיפות")
+        + stat_tile("הגנות מוצלחות", game["defenses_won"], f"/ {game['defenses']}")
+        + stat_tile("אזורים שלמים", gl.regions_held(game, PLAYER), f"/ {len(gl.REGIONS)}")
     )
-    st.markdown(f'<div class="stats">{tiles}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="stats six">{tiles}</div>', unsafe_allow_html=True)
     _, center, _ = st.columns([1, 3, 1])
     with center:
         render_leaderboard(game)

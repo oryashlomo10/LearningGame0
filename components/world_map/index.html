@@ -24,6 +24,7 @@
   .name { font-size: 15.5px; font-weight: 800; fill: #fff; stroke-width: 3.6px; }
   .pts { font-size: 13px; font-weight: 700; fill: #ffd980; stroke-width: 3.4px; }
   .sel-dash { animation: dash 1.1s linear infinite; }
+  .front { animation: dash 2.4s linear infinite; }
   @keyframes dash { to { stroke-dashoffset: -22; } }
   .flash { animation: flash 1.3s ease-out forwards; pointer-events: none; }
   @keyframes flash { from { stroke-width: 3; opacity: 1; } to { stroke-width: 26; opacity: 0; } }
@@ -135,10 +136,10 @@
     var clip = el("clipPath", { id: "landClip" }, defs);
 
     // layers, bottom to top
-    ["sea", "waves", "halo", "links", "land", "shade", "hatch", "decor", "borders", "glow", "labels", "overlay", "compass", "vignette"]
+    ["sea", "waves", "halo", "links", "land", "shade", "hatch", "decor", "borders", "glow", "front", "labels", "overlay", "compass", "vignette"]
       .forEach(function (name) { layers[name] = el("g", { id: "layer-" + name }, svg); });
     layers.glow.setAttribute("filter", "url(#glow)");
-    ["labels", "borders", "glow", "decor", "shade", "hatch", "waves", "compass", "vignette", "links", "halo", "overlay"]
+    ["labels", "borders", "glow", "front", "decor", "shade", "hatch", "waves", "compass", "vignette", "links", "halo", "overlay"]
       .forEach(function (n) { layers[n].style.pointerEvents = "none"; });
 
     el("rect", { x: vb[0], y: vb[1], width: vb[2], height: vb[3], fill: "url(#sea)" }, layers.sea);
@@ -165,7 +166,9 @@
       var hat = el("path", { d: g.d, fill: "url(#hatch)" }, layers.hatch);
       el("path", { d: g.d, fill: "none", stroke: "#f2cf86", "stroke-opacity": "0.8", "stroke-width": "1.7", "stroke-linejoin": "round" }, layers.borders);
       var glow = el("path", { d: g.d, fill: "none", "stroke-width": "7", "stroke-linejoin": "round", "stroke-opacity": "0" }, layers.glow);
-      els[g.id] = { fill: fill, hatch: hat, glow: glow };
+      // dashed gold outline = "you may attack this" (borders one of your territories)
+      var front = el("path", { d: g.d, fill: "none", stroke: "#f5b942", "stroke-width": "2.6", "stroke-dasharray": "6 6", "stroke-linejoin": "round", "class": "front", display: "none" }, layers.front);
+      els[g.id] = { fill: fill, hatch: hat, glow: glow, front: front };
 
       fill.addEventListener("mouseenter", function () { hover(g.id, true); });
       fill.addEventListener("mousemove", moveTip);
@@ -229,7 +232,8 @@
   // ---------- interaction ----------
   function describe(id) {
     var t = current.state.byId[id];
-    return "<b>" + t.name + "</b><br>" + t.ownerName + " · " + t.diffLabel + " · " + t.points + " נק׳";
+    return "<b>" + t.name + "</b><br>" + t.topic + "<br>" + t.ownerName + " · " + t.diffLabel + " · " + t.points + " נק׳"
+      + (t.attackable ? "<br><b>אפשר לתקוף</b>" : "");
   }
   function hover(id, on) {
     var hp = document.getElementById("hoverPath");
@@ -299,6 +303,7 @@
       var e = els[t.id];
       e.fill.setAttribute("fill", fillFor(t.owner, state.colors));
       e.hatch.setAttribute("opacity", t.owner ? "0" : "1");
+      e.front.setAttribute("display", t.attackable ? "inline" : "none");
       if (t.owner === "me") {
         e.glow.setAttribute("stroke", state.colors.me);
         e.glow.setAttribute("stroke-opacity", "0.95");
