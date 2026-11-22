@@ -22,7 +22,7 @@ from qgen.chunking import DEFAULT_MAX_WORDS, DEFAULT_OVERLAP_WORDS, chunk_docume
 from qgen.extract import ExtractionError, extract_document
 from qgen.generate import generate_questions
 from qgen.providers import ProviderError, provider_from_env
-from question_bank import load_question_bank
+import question_bank
 from styles import build_css
 
 st.set_page_config(page_title="Conquest", page_icon="🏰", layout="wide")
@@ -63,18 +63,19 @@ def owner_color(owner):
     return PLAYERS[owner]["color"] if owner else "#3a4570"
 
 
-@st.cache_data
-def get_question_bank():
-    return load_question_bank()
+GAME_TOPICS = [name for name, _ in gl.REGIONS]     # the topics a reviewer can choose from
 
 
 # ======================================================================
 # Button callbacks (they run before the page reruns, so state is fresh)
 # ======================================================================
 def start_game():
-    bank = get_question_bank()
+    # Approved questions from uploaded material if any exist, else the sample questions (demo).
+    # Not cached: a question approved a moment ago must be playable in the next game.
+    bank = question_bank.get_game_questions(GAME_TOPICS)
     st.session_state.game = gl.new_game(bank["questions"])
     st.session_state.course = bank["course"]
+    st.session_state.question_mode = bank["mode"]
     st.session_state.view = "map"
     # Anonymous ids for data collection: a new session_id for every game,
     # one player_id for the whole browser session (random, not personal).
@@ -168,6 +169,8 @@ def render_topbar(game):
     else:
         used = game["attacks"]
         status = f'<span class="chip live">● משחק פעיל · תקיפה {used} מתוך {gl.MAX_ACTIONS}</span>'
+    if st.session_state.get("question_mode") == question_bank.MODE_DEMO:
+        status = '<span class="chip gold">שאלות לדוגמה · מצב הדגמה</span>' + status
     st.markdown(
         '<div class="topbar">'
         '<div class="brand"><span class="brand-mark">◆</span><span class="brand-name">CONQUEST</span></div>'
@@ -257,6 +260,12 @@ def render_menu():
         "וכובשים אותו. ככל שהשטח קשה יותר – הפרס גדול יותר. הידע שלכם הוא הנשק.</div>",
         unsafe_allow_html=True,
     )
+    approved_count = len(question_bank.load_approved(game_topics=GAME_TOPICS))
+    if approved_count:
+        mode_note = f"המשחק ישתמש ב-{approved_count} שאלות מאושרות מחומר שהועלה."
+    else:
+        mode_note = "אין עדיין שאלות מאושרות: המשחק ירוץ במצב הדגמה עם שאלות לדוגמה."
+    st.markdown(f'<div class="lb-note" style="text-align:center">{mode_note}</div>', unsafe_allow_html=True)
     with st.container(key="start_btn"):
         st.button("התחלת משחק", type="primary", key="start_game", on_click=start_game)
     with st.container(key="materials_btn"):
@@ -679,30 +688,75 @@ def run_generation(document, chunks, per_chunk):
     st.session_state.generated = {"document_id": document["document_id"], "provider": provider_name, "result": result}
 
 
-def generated_html(questions):
-    cards = ""
-    for q in questions:
-        options = ""
-        for option in q["options"]:
-            right = option == q["correct_answer"]
-            options += f'<div class="gen-option{" gen-right" if right else ""}">{"✓ " if right else ""}{esc(option)}</div>'
-        page = f'עמוד {q["source_page"]}' if q["source_page"] else "ללא עמודים"
-        cards += (
-            '<div class="chunk"><div class="q-meta">'
-            f'<span class="chip gold">{esc(q["topic"])}</span>'
-            f'<span class="chip">{DIFFICULTY_HE.get(q["difficulty"], q["difficulty"])}</span>'
-            f'<span class="chip">{page}</span><span class="chip">{esc(q["source_chunk_id"])}</span></div>'
-            f'<div class="chunk-text"><b>{esc(q["question"])}</b></div>{options}'
-            f'<div class="chunk-text"><b>הסבר:</b> {esc(q["explanation"])}</div>'
-            f'<div class="chunk-text"><b>ציטוט מהמקור:</b> “{esc(q["source_quote"])}”</div></div>'
-        )
-    return f'<div class="scrollbox">{cards}</div>'
+def question_card_html(q):
+    options = ""
+    for option in q["options"]:
+        right = option == q["correct_answer"]
+        options += f'<div class="gen-option{" gen-right" if right else ""}">{"✓ " if right else ""}{esc(option)}</div>'
+    page = f'עמוד {q["source_page"]}' if q["source_page"] else "ללא עמודים"
+    return (
+        '<div class="chunk"><div class="q-meta">'
+        f'<span class="chip gold">נושא המודל: {esc(q["topic"])}</span>'
+        f'<span class="chip">{DIFFICULTY_HE.get(q["difficulty"], q["difficulty"])}</span>'
+        f'<span class="chip">{page}</span><span class="chip">{esc(q["source_chunk_id"])}</span></div>'
+        f'<div class="chunk-text"><b>{esc(q["question"])}</b></div>{options}'
+        f'<div class="chunk-text"><b>הסבר:</b> {esc(q["explanation"])}</div>'
+        f'<div class="chunk-text"><b>ציטוט מהמקור:</b> “{esc(q["source_quote"])}”</div></div>'
+    )
+
+
+# Review of generated questions: approve (with a game topic) or reject.
+# Approved questions are saved in data/approved_questions.json (see question_bank.py).
+def approve_generated(question, topic_key):
+    topic = st.session_state.get(topic_key)
+    status, message = question_bank.approve_question(question, topic, GAME_TOPICS)
+    st.session_state.setdefault("review_messages", {})[question["id"]] = (status, message)
+    st.session_state.setdefault("review_rejected", set()).discard(question["id"])
+
+
+def reject_generated(question):
+    status, message = question_bank.reject_question(question["id"])      # also removes it if it was approved
+    st.session_state.setdefault("review_rejected", set()).add(question["id"])
+    st.session_state.setdefault("review_messages", {}).pop(question["id"], None)
+    if status == "error":
+        st.session_state.review_messages[question["id"]] = (status, message)
+
+
+def restore_generated(question):
+    st.session_state.setdefault("review_rejected", set()).discard(question["id"])
+
+
+def render_review_card(q, approved):
+    """One generated question with its approve / reject controls."""
+    qid = q["id"]
+    status, message = st.session_state.get("review_messages", {}).get(qid, (None, ""))
+    if qid in st.session_state.get("review_rejected", set()):
+        st.caption(f"נדחתה: {q['question']}")
+        st.button("ביטול הדחייה", key=f"restore_{qid}", on_click=restore_generated, args=(q,))
+        return
+    st.markdown(question_card_html(q), unsafe_allow_html=True)
+    if qid in approved:
+        st.success("✓ אושרה ונשמרה למשחק")
+    else:
+        if status == "duplicate":
+            st.warning(message)
+        elif status == "error":
+            st.error(message)
+        topic_key = f"game_topic_{qid}"
+        st.selectbox("נושא במשחק (חובה לאישור)", GAME_TOPICS, index=None, placeholder="בחרו נושא",
+                     key=topic_key)
+        st.button("אישור ושמירה למשחק", key=f"approve_{qid}", type="primary",
+                  disabled=st.session_state.get(topic_key) is None,
+                  on_click=approve_generated, args=(q, topic_key))
+    label = "הסרה מהמשחק" if qid in approved else "דחייה"
+    st.button(label, key=f"reject_{qid}", on_click=reject_generated, args=(q,))
 
 
 def render_question_generation(document, chunks):
     st.markdown(
-        '<div class="empty-hint">השאלות נוצרות על ידי מודל שפה מקומי (Ollama) מתוך המקטעים בלבד, '
-        "ומוצגות לבדיקה בלבד. הן עדיין לא נכנסות למשחק. בדקו כל שאלה מול הציטוט שלה.</div>",
+        '<div class="empty-hint">השאלות נוצרות על ידי מודל שפה מקומי (Ollama) מתוך המקטעים בלבד. '
+        "בדקו כל שאלה מול הציטוט שלה, בחרו לה נושא משחק ואשרו או דחו. רק שאלות מאושרות נכנסות למשחק "
+        "(וכשיש כאלה, המשחק משתמש רק בהן).</div>",
         unsafe_allow_html=True,
     )
     count = st.slider("מספר מקטעים ליצירה (מהראשון)", 1, min(len(chunks), 10), min(len(chunks), 3))
@@ -718,7 +772,10 @@ def render_question_generation(document, chunks):
     if result["questions"]:
         count_text = "נוצרה שאלה תקינה אחת" if len(result["questions"]) == 1 else f"נוצרו {len(result['questions'])} שאלות תקינות"
         st.success(f"{count_text} ({saved['provider']}).")
-        st.markdown(generated_html(result["questions"]), unsafe_allow_html=True)
+        approved = question_bank.approved_ids()
+        st.caption(f"{len(approved)} שאלות מאושרות במאגר המשחק")
+        for q in result["questions"]:
+            render_review_card(q, approved)
     elif not result["fatal"]:
         st.warning("לא נוצרו שאלות תקינות.")
     if result["problems"]:
