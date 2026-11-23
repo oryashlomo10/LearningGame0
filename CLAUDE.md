@@ -37,8 +37,17 @@ requirements.txt   Dependencies (streamlit>=1.40)
 Question schema (the contract for any future question source, e.g. AI): `id, question, options (exactly 4), correct_answer (exact text of one option), explanation, topic, difficulty (easy|medium|hard), points`.
 
 ## 4. Tech Stack
-- Python, Streamlit (UI, session state), `pypdf` (PDF text extraction), Git/GitHub.
-- No other libraries. No database, no AI/API client.
+- Python, Streamlit (UI, session state), `pypdf` (PDF text extraction), `pandas` + `altair` (data dashboard), Git/GitHub.
+- No database, no AI/API client.
+
+## 4b. Data & Dashboard (Milestone 2)
+- **Goal:** predict whether a player answers a question correctly (`correct`, binary). M3 will build the model; the M2 baseline is 66.1% (always predict "correct").
+- **Dataset:** ASSISTments 2009-2010 skill-builder (corrected version), cleaned by `data_prep.py` into `data/assistments_clean.csv` (269,196 rows). Raw file (64MB) is not in the repo; the link is in README.md section 11. It is school math data in English, not CS in Hebrew: the model learns general answering patterns, not question content.
+- **Dashboard:** `dashboard.py` (run `streamlit run dashboard.py`; it is separate from the game `app.py`). It also appends `data/attempts.jsonl` (real game answers) if the file exists, marked `source = "Conquest (המשחק)"`. Column mapping: `topic -> skill_name`, `response_time_ms/1000 -> response_sec`, `is_correct -> correct`.
+- **What we learned:** response time vs success is not linear: <=5s answers are right only 51% (about guessing), 5-10s best (74%), >80s drops to 57%. Topics range from ~45% to ~90% success. First attempt at a topic is the hardest (59.5% vs ~69% later).
+- **Role:** ASSISTments is only a cold-start prior for per-player question matching; game data (`attempts.jsonl`) should take over. Do not delete or dilute ASSISTments: give game rows a much higher `sample_weight` (e.g. 50-100) or fine-tune on game data after pre-training, and ALWAYS evaluate on game data only. Details in `data/README.md`.
+- **Leakage warning:** `hint_count` and `attempt_count` are only known after the answer (hint use is almost always `correct=0`). Never use them as model features in M3.
+- Rows without a skill (72,270) were dropped, not filled; times <=0 or >10 minutes were dropped; only the first attempt per student+problem is kept.
 
 ## 5. Implemented So Far
 - Main menu (Hebrew RTL, game identity) with a working "התחלת משחק" button.
